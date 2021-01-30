@@ -1,0 +1,70 @@
+import json
+import os
+import socket
+import struct
+
+BUFFER_SIZE = 4096  # a uniform buffer size to use for our transfers
+
+# pick up an absolute path from the script folder, not necessary tho
+file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "downloads", "cat.png"))
+#client
+
+# let's first prepare the payload to send over
+payload = {"id": 12, "filename": os.path.basename(file_path), "message": "So cute!"}
+# now JSON encode it and then turn it onto a bytes stream by encoding it as UTF-8
+json_data = json.dumps(payload).encode("utf-8")
+# then connect to the server and send everything
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:  # create a socket
+    print("Connecting...")
+    s.connect(("127.0.0.1", 1234))  # connect to the server
+    # first send the JSON payload length
+    print("Sending `{filename}` with a message: {message}.".format(**payload))
+    s.sendall(struct.pack(">I", len(json_data)))  # pack as BE 32-bit unsigned int
+    # now send the JSON payload itself
+    s.sendall(json_data)  # let Python deal with the buffer on its own for the JSON...
+    # finally, open the file and 'stream' it to the socket
+    with open(file_path, "rb") as f:
+        chunk = f.read(BUFFER_SIZE)
+        while chunk:
+            s.send(chunk)
+            chunk = f.read(BUFFER_SIZE)
+    # alternatively, if you're using Python 3.5+ you can just use socket.sendfile() instead
+    print("Sent.")
+    
+ #server
+    
+import json
+import os
+import socket
+import struct
+
+BUFFER_SIZE = 4096  # a uniform buffer size to use for our transfers
+
+target_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "fileCache"))
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 1234))  # bind to the 1234 port on localhost
+    s.listen(0)  # allow only one connection so we don't have to deal with data separation
+    while True:
+        print("Waiting for a connection...")
+        connection, address = s.accept()  # wait for and accept the incoming connection
+        print("Connection from `{}` accepted.".format(address))
+        # read the starting 32 bits and unpack them into an int to get the JSON length
+        json_length = struct.unpack(">I", connection.recv(4))[0]
+        # now read the JSON data of the given size and JSON decode it
+        json_data = b""  # initiate an empty bytes structure
+        while len(json_data) < json_length:
+            chunk = connection.recv(min(BUFFER_SIZE, json_length - len(json_data)))
+            if not chunk:  # no data, possibly broken connection/bad protocol
+                break  # just exit for now, you should deal with this case in production
+            json_data += chunk
+        payload = json.loads(json_data.decode("utf-8"))  # JSON decode the payload
+        # now read the rest and store it into a file at the target path
+        file_path = os.path.join(target_path, payload["filename"])
+        with open(file_path, "wb") as f:  # open the target file for writing...
+            chunk = connection.recv(BUFFER_SIZE)  # and stream the socket data to it...
+            while chunk:
+                f.write(chunk)
+                chunk = connection.recv(BUFFER_SIZE)
+        # finally, lets print out that we received the data
+        print("Received `{filename}` with a message: {message}".format(**payload))
